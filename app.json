@@ -1,11 +1,12 @@
 {
   "expo": {
-    "name": "appavistave",
-    "slug": "appavistave",
+    "name": "birdtacora",
+    "slug": "birdtacora",
     "version": "1.0.0",
+    "description": "Registro de avistamientos de aves.",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "appavistave",
+    "scheme": "birdtacora",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
@@ -13,7 +14,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#EAF1EC",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
@@ -28,14 +29,28 @@
     "plugins": [
       "expo-router",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "Permite seleccionar fotografías para documentar avistamientos de aves.",
+          "cameraPermission": "Permite tomar fotografías para documentar avistamientos de aves.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Permite guardar coordenadas del avistamiento mientras usas la app."
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff",
+          "backgroundColor": "#EAF1EC",
           "dark": {
-            "backgroundColor": "#000000"
+            "backgroundColor": "#26324A"
           }
         }
       ]

@@ -30,7 +30,14 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Registro',
+          title: 'Avistamientos',
+          tabBarIcon: ({ color }) => <IconSymbol size={28} name="list.bullet" color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="register"
+        options={{
+          title: 'Registrar',
           tabBarIcon: ({ color }) => <IconSymbol size={28} name="plus.circle.fill" color={color} />,
         }}
       />

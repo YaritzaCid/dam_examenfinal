@@ -1,5 +1,7 @@
 const OPEN_METEO_FORECAST_URL = 'https://api.open-meteo.com/v1/forecast';
 const DEFAULT_WEATHER_TIMEOUT_MS = 6000;
+const WEATHER_CACHE_TTL_MS = 10 * 60 * 1000;
+const weatherCache = new Map<string, { expiresAt: number; summary: WeatherSummary }>();
 
 export type OpenMeteoCurrentWeather = {
   time: string;
@@ -130,6 +132,13 @@ export async function fetchWeatherForLocation(
     throw new Error('Coordenadas inválidas para consultar clima.');
   }
 
+  const cacheKey = `${latitude.toFixed(3)},${longitude.toFixed(3)}`;
+  const cachedWeather = weatherCache.get(cacheKey);
+
+  if (cachedWeather && cachedWeather.expiresAt > Date.now()) {
+    return cachedWeather.summary;
+  }
+
   const controller = new AbortController();
   const timeoutId = setTimeout(
     () => controller.abort(),
@@ -155,13 +164,20 @@ export async function fetchWeatherForLocation(
       throw new Error('Open-Meteo devolvió datos incompletos.');
     }
 
-    return {
+    const summary = {
       temperatureCelsius: data.current.temperature_2m,
       relativeHumidity: data.current.relative_humidity_2m,
       weatherCode: data.current.weather_code,
       condition: translateWeatherCode(data.current.weather_code),
       observedAt: data.current.time,
     };
+
+    weatherCache.set(cacheKey, {
+      expiresAt: Date.now() + WEATHER_CACHE_TTL_MS,
+      summary,
+    });
+
+    return summary;
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       throw new Error('La consulta de clima tardó demasiado. Intenta de nuevo actualizando GPS.');

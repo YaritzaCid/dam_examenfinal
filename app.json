@@ -29,11 +29,10 @@
     "plugins": [
       "expo-router",
       [
-        "expo-image-picker",
+        "expo-camera",
         {
-          "photosPermission": "Permite seleccionar fotografías para documentar avistamientos de aves.",
           "cameraPermission": "Permite tomar fotografías para documentar avistamientos de aves.",
-          "microphonePermission": false
+          "recordAudioAndroid": false
         }
       ],
       [

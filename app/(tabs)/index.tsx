@@ -1,7 +1,8 @@
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Image } from 'expo-image';
-import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import { useMemo, useState } from 'react';
+import { fetchWeatherForLocation, type WeatherSummary } from '@/services/weather';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -13,19 +14,23 @@ import {
   View,
 } from 'react-native';
 
-const WEATHER_OPTIONS = ['Soleado', 'Nublado', 'Lluvia', 'Viento', 'Niebla'] as const;
-
-type Weather = (typeof WEATHER_OPTIONS)[number];
-
-type PreparedSighting = {
-  birdName: string;
-  count: number;
-  observedAt: string;
-  weather: Weather | '';
-  location: string;
-  notes: string;
-  hasPhoto: boolean;
+type SightingLocation = {
+  latitude: number;
+  longitude: number;
 };
+
+export interface BirdSighting {
+  id: string;
+  photoUri: string;
+  latitude: number;
+  longitude: number;
+  birdName: string;
+  observedAt: string;
+  count: number;
+  notes: string;
+  weather?: WeatherSummary;
+  createdAt: string;
+}
 
 const observedAtFormatter = new Intl.DateTimeFormat('es-ES', {
   dateStyle: 'medium',
@@ -70,51 +75,42 @@ const typefaces = {
 } as const;
 
 export default function HomeScreen() {
+  const cameraRef = useRef<CameraView | null>(null);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [photoUri, setPhotoUri] = useState<string | null>(null);
-  const [locationText, setLocationText] = useState('');
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [isCameraReady, setIsCameraReady] = useState(false);
+  const [isTakingPhoto, setIsTakingPhoto] = useState(false);
+  const [location, setLocation] = useState<SightingLocation | null>(null);
   const [isLocating, setIsLocating] = useState(false);
   const [locationError, setLocationError] = useState('');
-  const [weather, setWeather] = useState<Weather | ''>('');
   const [birdName, setBirdName] = useState('');
   const [observedAt, setObservedAt] = useState(() => observedAtFormatter.format(new Date()));
   const [count, setCount] = useState('1');
   const [notes, setNotes] = useState('');
-  const [preparedSighting, setPreparedSighting] = useState<PreparedSighting | null>(null);
+  const [weather, setWeather] = useState<WeatherSummary | null>(null);
+  const [isWeatherLoading, setIsWeatherLoading] = useState(false);
+  const [weatherError, setWeatherError] = useState('');
+  const [preparedSighting, setPreparedSighting] = useState<BirdSighting | null>(null);
   const [formError, setFormError] = useState('');
 
-  const countNumber = Number.parseInt(count, 10);
-  const canPrepare = birdName.trim().length > 0 && Number.isFinite(countNumber) && countNumber > 0;
+  const countNumber = Number(count);
+  const hasValidCount = Number.isInteger(countNumber) && countNumber >= 1;
+  const requiredComplete =
+    Boolean(photoUri) &&
+    Boolean(location) &&
+    birdName.trim().length > 0 &&
+    observedAt.trim().length > 0 &&
+    hasValidCount;
 
   const fieldCompleteness = useMemo(() => {
-    const fields = [photoUri, locationText, weather, birdName, observedAt, count, notes];
-    const completed = fields.filter((value) => String(value).trim().length > 0).length;
+    const fields = [photoUri, location, birdName, observedAt, count, notes];
+    const completed = fields.filter((value) => String(value ?? '').trim().length > 0).length;
 
     return `${completed}/${fields.length}`;
-  }, [birdName, count, locationText, notes, observedAt, photoUri, weather]);
+  }, [birdName, count, location, notes, observedAt, photoUri]);
 
-  const pickPhoto = async () => {
-    setFormError('');
-
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-
-    if (!permission.granted) {
-      setFormError('Activa permiso de fotos para añadir evidencia.');
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.85,
-    });
-
-    if (!result.canceled) {
-      setPhotoUri(result.assets[0].uri);
-    }
-  };
-
-  const fillCurrentLocation = async () => {
+  const fillCurrentLocation = useCallback(async () => {
     setLocationError('');
     setFormError('');
     setIsLocating(true);
@@ -123,40 +119,166 @@ export default function HomeScreen() {
       const permission = await Location.requestForegroundPermissionsAsync();
 
       if (permission.status !== 'granted') {
-        setLocationError('Permiso de ubicación denegado.');
+        setLocation(null);
+        setLocationError('Permiso de ubicación denegado. Actívalo para registrar latitud y longitud.');
         return;
       }
 
       const position = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
+        accuracy: Location.Accuracy.High,
       });
 
-      setLocationText(
-        `${position.coords.latitude.toFixed(5)}, ${position.coords.longitude.toFixed(5)}`
-      );
+      setLocation({
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+      });
     } catch {
-      setLocationError('No se pudo leer la ubicación. Puedes escribirla manualmente.');
+      setLocationError('No se pudo obtener la ubicación GPS. Intenta de nuevo.');
     } finally {
       setIsLocating(false);
     }
+  }, []);
+
+  useEffect(() => {
+    void fillCurrentLocation();
+  }, [fillCurrentLocation]);
+  useEffect(() => {
+    let isActive = true;
+
+    if (!location) {
+      setWeather(null);
+      setWeatherError('');
+      setIsWeatherLoading(false);
+      return;
+    }
+
+    setWeather(null);
+    setWeatherError('');
+    setIsWeatherLoading(true);
+
+    fetchWeatherForLocation(location.latitude, location.longitude)
+      .then((nextWeather) => {
+        if (isActive) {
+          setWeather(nextWeather);
+        }
+      })
+      .catch(() => {
+        if (isActive) {
+          setWeatherError('No se pudo obtener el clima. Puedes guardar el avistamiento sin clima.');
+        }
+      })
+      .finally(() => {
+        if (isActive) {
+          setIsWeatherLoading(false);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [location]);
+
+  const openCamera = async () => {
+    setFormError('');
+    setIsCameraReady(false);
+
+    if (cameraPermission?.granted) {
+      setIsCameraOpen(true);
+      return;
+    }
+
+    const permission = await requestCameraPermission();
+
+    if (!permission.granted) {
+      setFormError('Permiso de cámara denegado. Actívalo para tomar la fotografía obligatoria.');
+      return;
+    }
+
+    setIsCameraOpen(true);
   };
 
-  const prepareSighting = () => {
-    if (!canPrepare) {
+  const takePhoto = async () => {
+    if (!cameraRef.current || !isCameraReady) {
+      setFormError('Espera a que la cámara esté lista antes de tomar la fotografía.');
+      return;
+    }
+
+    setFormError('');
+    setIsTakingPhoto(true);
+
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.85,
+      });
+
+      if (!photo?.uri) {
+        setFormError('No se pudo guardar la fotografía tomada. Intenta de nuevo.');
+        return;
+      }
+
+      setPhotoUri(photo.uri);
+      setIsCameraOpen(false);
+    } catch {
+      setFormError('No se pudo tomar la fotografía. Intenta de nuevo.');
+    } finally {
+      setIsTakingPhoto(false);
+    }
+  };
+
+  const validateSighting = () => {
+    const errors: string[] = [];
+
+    if (!photoUri) {
+      errors.push('Falta la fotografía tomada con la cámara.');
+    }
+
+    if (!location) {
+      errors.push('Falta la ubicación GPS con latitud y longitud.');
+    }
+
+    if (birdName.trim().length === 0) {
+      errors.push('Falta el nombre del ave. Puedes escribir "no identificada".');
+    }
+
+    if (observedAt.trim().length === 0) {
+      errors.push('Falta la fecha y hora del avistamiento.');
+    }
+
+    if (!hasValidCount) {
+      errors.push('La cantidad de ejemplares debe ser un número entero mínimo 1.');
+    }
+
+    return errors;
+  };
+
+  const saveSighting = () => {
+    const validationErrors = validateSighting();
+
+    if (validationErrors.length > 0) {
       setPreparedSighting(null);
-      setFormError('Nombre de ave y cantidad válida son obligatorios.');
+      setFormError(validationErrors.join('\n'));
+      return;
+    }
+
+    const trimmedBirdName = birdName.trim();
+    const trimmedObservedAt = observedAt.trim();
+
+    if (!photoUri || !location || !trimmedBirdName || !trimmedObservedAt || !hasValidCount) {
       return;
     }
 
     setFormError('');
     setPreparedSighting({
-      birdName: birdName.trim(),
+      id: `${Date.now()}`,
+      photoUri,
+      latitude: location.latitude,
+      longitude: location.longitude,
+      birdName: trimmedBirdName,
+      observedAt: trimmedObservedAt,
       count: countNumber,
-      observedAt: observedAt.trim(),
-      weather,
-      location: locationText.trim(),
       notes: notes.trim(),
-      hasPhoto: Boolean(photoUri),
+      weather: weather ?? undefined,
+      createdAt: new Date().toISOString(),
     });
   };
 
@@ -206,21 +328,69 @@ export default function HomeScreen() {
 
           <View style={styles.formBody}>
             <View style={styles.photoSection}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Seleccionar fotografía del avistamiento"
-                onPress={pickPhoto}
-                style={({ pressed }) => [styles.photoButton, pressed && styles.pressed]}>
-                {photoUri ? (
-                  <Image source={{ uri: photoUri }} style={styles.photoPreview} contentFit="cover" />
-                ) : (
-                  <View style={styles.photoPlaceholder}>
-                    <Text style={styles.photoGlyph}>◒</Text>
-                    <Text style={styles.photoTitle}>Fotografía</Text>
-                    <Text style={styles.photoHint}>Toca para añadir imagen</Text>
+              {isCameraOpen && cameraPermission?.granted ? (
+                <View style={styles.cameraFrame}>
+                  <CameraView
+                    ref={cameraRef}
+                    active={isCameraOpen}
+                    facing="back"
+                    onCameraReady={() => setIsCameraReady(true)}
+                    style={styles.cameraPreview}
+                  />
+                  <View style={styles.cameraOverlay}>
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={isTakingPhoto}
+                      onPress={takePhoto}
+                      style={({ pressed }) => [
+                        styles.primaryButton,
+                        isTakingPhoto && styles.disabledButton,
+                        pressed && styles.pressed,
+                      ]}>
+                      {isTakingPhoto ? (
+                        <ActivityIndicator color={palette.card} size="small" />
+                      ) : (
+                        <Text style={styles.primaryButtonText}>Tomar foto</Text>
+                      )}
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={isTakingPhoto}
+                      onPress={() => setIsCameraOpen(false)}
+                      style={({ pressed }) => [
+                        styles.secondaryButton,
+                        isTakingPhoto && styles.disabledButton,
+                        pressed && styles.pressed,
+                      ]}>
+                      <Text style={styles.secondaryButtonText}>Cerrar cámara</Text>
+                    </Pressable>
                   </View>
-                )}
-              </Pressable>
+                </View>
+              ) : (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Abrir cámara para tomar fotografía del avistamiento"
+                  onPress={openCamera}
+                  style={({ pressed }) => [styles.photoButton, pressed && styles.pressed]}>
+                  {photoUri ? (
+                    <View>
+                      <Image source={{ uri: photoUri }} style={styles.photoPreview} contentFit="cover" />
+                      <View style={styles.photoRetakeBadge}>
+                        <Text style={styles.photoRetakeText}>Tocar para tomar otra foto</Text>
+                      </View>
+                    </View>
+                  ) : (
+                    <View style={styles.photoPlaceholder}>
+                      <Text style={styles.photoGlyph}>◒</Text>
+                      <Text style={styles.photoTitle}>Fotografía</Text>
+                      <Text style={styles.photoHint}>Toca para abrir cámara</Text>
+                    </View>
+                  )}
+                </Pressable>
+              )}
+              {cameraPermission?.granted === false ? (
+                <Text style={styles.helperError}>Permiso de cámara denegado. Puedes volver a tocar para solicitarlo.</Text>
+              ) : null}
             </View>
 
             <View style={styles.fieldGroup}>
@@ -228,7 +398,7 @@ export default function HomeScreen() {
               <TextInput
                 autoCapitalize="words"
                 onChangeText={setBirdName}
-                placeholder="Ej. Garza real"
+                placeholder="Ej. Garza real o no identificada"
                 placeholderTextColor={palette.placeholder}
                 style={styles.input}
                 value={birdName}
@@ -270,16 +440,17 @@ export default function HomeScreen() {
             </View>
 
             <View style={styles.fieldGroup}>
-              <Text style={styles.label}>Ubicación</Text>
+              <Text style={styles.label}>Latitud y longitud</Text>
               <View style={styles.locationStack}>
-                <TextInput
-                  multiline
-                  onChangeText={setLocationText}
-                  placeholder="Coordenadas o punto de referencia"
-                  placeholderTextColor={palette.placeholder}
-                  style={[styles.input, styles.locationInput]}
-                  value={locationText}
-                />
+                <View style={[styles.input, styles.locationInput]}>
+                  <Text style={styles.locationValue}>
+                    {location
+                      ? `${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`
+                      : isLocating
+                        ? 'Obteniendo ubicación GPS...'
+                        : 'Sin ubicación GPS'}
+                  </Text>
+                </View>
                 <Pressable
                   accessibilityRole="button"
                   disabled={isLocating}
@@ -292,41 +463,39 @@ export default function HomeScreen() {
                   {isLocating ? (
                     <ActivityIndicator color={palette.card} size="small" />
                   ) : (
-                    <Text style={styles.smallButtonText}>GPS</Text>
+                    <Text style={styles.smallButtonText}>Actualizar GPS</Text>
                   )}
                 </Pressable>
               </View>
-              {locationError ? <Text style={styles.helperError}>{locationError}</Text> : null}
+              {locationError ? (
+                <Text style={styles.helperError}>{locationError}</Text>
+              ) : (
+                <Text style={styles.helperText}>Se intenta obtener automáticamente al abrir el formulario.</Text>
+              )}
             </View>
 
             <View style={styles.fieldGroup}>
               <Text style={styles.label}>Clima</Text>
-              <View style={styles.weatherGrid}>
-                {WEATHER_OPTIONS.map((option) => {
-                  const selected = weather === option;
-
-                  return (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityState={{ selected }}
-                      key={option}
-                      onPress={() => setWeather(option)}
-                      style={({ pressed }) => [
-                        styles.weatherChip,
-                        selected && styles.weatherChipSelected,
-                        pressed && styles.pressed,
-                      ]}>
-                      <Text
-                        style={[
-                          styles.weatherChipText,
-                          selected && styles.weatherChipTextSelected,
-                        ]}>
-                        {option}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
+              <View style={styles.weatherCard}>
+                {isWeatherLoading ? (
+                  <View style={styles.weatherStatusRow}>
+                    <ActivityIndicator color={palette.kingfisher} size="small" />
+                    <Text style={styles.weatherDetails}>Consultando Open-Meteo...</Text>
+                  </View>
+                ) : weather ? (
+                  <>
+                    <Text style={styles.weatherCondition}>{weather.condition}</Text>
+                    <Text style={styles.weatherDetails}>
+                      {weather.temperatureCelsius.toFixed(1)} °C · Humedad {weather.relativeHumidity}%
+                    </Text>
+                  </>
+                ) : (
+                  <Text style={styles.weatherDetails}>
+                    {location ? 'Clima no disponible.' : 'Se consultará cuando exista GPS.'}
+                  </Text>
+                )}
               </View>
+              {weatherError ? <Text style={styles.helperError}>{weatherError}</Text> : null}
             </View>
 
             <View style={styles.fieldGroup}>
@@ -346,20 +515,20 @@ export default function HomeScreen() {
 
             <Pressable
               accessibilityRole="button"
-              onPress={prepareSighting}
+              onPress={saveSighting}
               style={({ pressed }) => [
                 styles.primaryButton,
-                !canPrepare && styles.primaryButtonDisabled,
+                !requiredComplete && styles.primaryButtonDisabled,
                 pressed && styles.pressed,
               ]}>
-              <Text style={styles.primaryButtonText}>Preparar registro</Text>
+              <Text style={styles.primaryButtonText}>Guardar</Text>
             </Pressable>
           </View>
         </View>
 
         <View style={[styles.summaryCard, !preparedSighting && styles.summaryCardQuiet]}>
           <Text style={[styles.summaryKicker, !preparedSighting && styles.summaryKickerQuiet]}>
-            {preparedSighting ? 'Registro listo' : 'Previsualización'}
+            {preparedSighting ? 'Registro construido' : 'Previsualización'}
           </Text>
           <Text style={[styles.summaryTitle, !preparedSighting && styles.summaryTitleQuiet]}>
             {preparedSighting?.birdName || 'Completa el avistamiento'}
@@ -367,18 +536,25 @@ export default function HomeScreen() {
           <Text style={[styles.summaryText, !preparedSighting && styles.summaryTextQuiet]}>
             {preparedSighting
               ? `${preparedSighting.count} ejemplar(es) · ${preparedSighting.observedAt}`
-              : 'Este espacio permanece fijo para que la vista no salte al preparar el registro.'}
+              : 'Guardar construirá el objeto RF-02 sin AsyncStorage, listado ni detalle.'}
           </Text>
           <Text style={[styles.summaryText, !preparedSighting && styles.summaryTextQuiet]}>
             {preparedSighting
-              ? `${preparedSighting.weather || 'Clima sin indicar'} · ${
-                  preparedSighting.location || 'Ubicación sin indicar'
-                } · ${preparedSighting.hasPhoto ? 'Con fotografía' : 'Sin fotografía'}`
-              : 'Sin desplazamiento automático. Sin rebote.'}
+              ? `GPS ${preparedSighting.latitude.toFixed(6)}, ${preparedSighting.longitude.toFixed(
+                  6
+                )} · Con fotografía`
+              : 'La foto debe venir de cámara y la ubicación desde GPS.'}
           </Text>
-          {preparedSighting?.notes ? (
-            <Text style={styles.summaryNotes}>{preparedSighting.notes}</Text>
-          ) : null}
+          <Text style={[styles.summaryText, !preparedSighting && styles.summaryTextQuiet]}>
+            {preparedSighting
+              ? preparedSighting.weather
+                ? `Clima ${preparedSighting.weather.condition} · ${preparedSighting.weather.temperatureCelsius.toFixed(
+                    1
+                  )} °C · Humedad ${preparedSighting.weather.relativeHumidity}%`
+                : 'Clima no disponible; registro guardable igualmente'
+              : 'El clima se consulta con Open-Meteo al tener GPS.'}
+          </Text>
+          {preparedSighting?.notes ? <Text style={styles.summaryNotes}>{preparedSighting.notes}</Text> : null}
         </View>
       </ScrollView>
     </View>
@@ -573,6 +749,37 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginTop: 4,
   },
+  cameraFrame: {
+    backgroundColor: palette.ink,
+    borderRadius: 24,
+    minHeight: 260,
+    overflow: 'hidden',
+  },
+  cameraPreview: {
+    minHeight: 260,
+  },
+  cameraOverlay: {
+    bottom: 14,
+    gap: 10,
+    left: 14,
+    position: 'absolute',
+    right: 14,
+  },
+  photoRetakeBadge: {
+    backgroundColor: 'rgba(38, 50, 74, 0.82)',
+    borderRadius: 999,
+    bottom: 12,
+    left: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    position: 'absolute',
+  },
+  photoRetakeText: {
+    color: palette.card,
+    fontFamily: typefaces.utility,
+    fontSize: 11,
+    fontWeight: '800',
+  },
   fieldGroup: {
     gap: 8,
   },
@@ -619,6 +826,12 @@ const styles = StyleSheet.create({
   locationInput: {
     minHeight: 72,
   },
+  locationValue: {
+    color: palette.ink,
+    fontFamily: typefaces.body,
+    fontSize: 16,
+    lineHeight: 22,
+  },
   smallButton: {
     alignItems: 'center',
     backgroundColor: palette.ink,
@@ -640,37 +853,46 @@ const styles = StyleSheet.create({
   countInput: {
     textAlign: 'center',
   },
-  weatherGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  weatherChip: {
+  weatherCard: {
     backgroundColor: '#F4F1E4',
     borderColor: palette.line,
-    borderRadius: 999,
+    borderRadius: 18,
     borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    gap: 6,
+    minHeight: 72,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 13,
   },
-  weatherChipSelected: {
-    backgroundColor: palette.mist,
-    borderColor: palette.kingfisher,
+  weatherStatusRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
   },
-  weatherChipText: {
-    color: palette.reed,
-    fontFamily: typefaces.utility,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  weatherChipTextSelected: {
+  weatherCondition: {
     color: palette.ink,
+    fontFamily: typefaces.display,
+    fontSize: 22,
+    fontWeight: '800',
+    textTransform: 'capitalize',
+  },
+  weatherDetails: {
+    color: palette.muted,
+    fontFamily: typefaces.body,
+    fontSize: 14,
+    lineHeight: 20,
   },
   notesInput: {
     minHeight: 118,
   },
   helperError: {
     color: palette.errorInk,
+    fontFamily: typefaces.body,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  helperText: {
+    color: palette.muted,
     fontFamily: typefaces.body,
     fontSize: 13,
     lineHeight: 18,
@@ -700,6 +922,21 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '900',
     letterSpacing: 0.2,
+  },
+  secondaryButton: {
+    alignItems: 'center',
+    backgroundColor: palette.card,
+    borderColor: palette.line,
+    borderRadius: 20,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: 50,
+  },
+  secondaryButtonText: {
+    color: palette.ink,
+    fontFamily: typefaces.utility,
+    fontSize: 13,
+    fontWeight: '800',
   },
   pressed: {
     opacity: 0.82,

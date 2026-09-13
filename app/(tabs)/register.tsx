@@ -2,6 +2,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Image } from 'expo-image';
 import * as Location from 'expo-location';
 import { router } from 'expo-router';
+import { WeatherIcon } from '@/components/weather-icon';
 import { persistSightingPhoto } from '@/services/photos';
 import { getAllSightings, saveSighting as persistSighting } from '@/services/storage';
 import { fetchWeatherForLocation, type WeatherSummary } from '@/services/weather';
@@ -683,7 +684,11 @@ export default function HomeScreen() {
                   </View>
                 ) : weather ? (
                   <>
-                    <Text style={styles.weatherCondition}>{weather.condition}</Text>
+                    <Text style={styles.weatherCondition}>
+                      <WeatherIcon color={palette.kingfisher} weatherCode={weather.weatherCode} />
+                      {'  '}
+                      {weather.condition}
+                    </Text>
                     <Text style={styles.weatherDetails}>
                       {weather.temperatureCelsius.toFixed(1)} °C · Humedad {weather.relativeHumidity}%
                     </Text>

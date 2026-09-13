@@ -4,6 +4,7 @@ import * as Location from 'expo-location';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { WeatherIcon } from '@/components/weather-icon';
 import { getSightingById } from '@/services/storage';
 import type { BirdSighting } from '@/types/sighting';
 
@@ -226,7 +227,15 @@ export default function SightingDetailScreen() {
 
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Clima</Text>
-        <Text style={styles.weatherText}>{weatherSummary}</Text>
+        <Text style={styles.weatherText}>
+          {sighting.weather ? (
+            <>
+              <WeatherIcon color={palette.kingfisher} size={20} weatherCode={sighting.weather.weatherCode} />
+              {'  '}
+            </>
+          ) : null}
+          {weatherSummary}
+        </Text>
       </View>
 
       <View style={styles.card}>

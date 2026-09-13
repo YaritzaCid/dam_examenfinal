@@ -7,6 +7,9 @@ import type { BirdSighting } from '@/types/sighting';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
+  AppState,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -19,6 +22,10 @@ import {
 type SightingLocation = {
   latitude: number;
   longitude: number;
+};
+
+type LocationRequestOptions = {
+  showBlockedAlert?: boolean;
 };
 
 
@@ -70,7 +77,7 @@ const typefaces = {
 
 export default function HomeScreen() {
   const cameraRef = useRef<CameraView | null>(null);
-  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [cameraPermission, requestCameraPermission, getCameraPermission] = useCameraPermissions();
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [isCameraReady, setIsCameraReady] = useState(false);
@@ -108,55 +115,126 @@ export default function HomeScreen() {
     return `${completed}/${fields.length}`;
   }, [birdName, count, location, notes, observedAt, photoUri]);
 
-  const fillCurrentLocation = useCallback(async () => {
-    setLocationError('');
-    setFormError('');
-    setIsLocating(true);
-
-    try {
-      const permission = await Location.requestForegroundPermissionsAsync();
-
-      if (permission.status !== 'granted') {
-        setLocation(null);
-        setLocationError('Permiso de ubicación denegado. Actívalo para registrar latitud y longitud.');
-        return;
-      }
-
-      const position = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-      });
-
-      setLocation({
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-      });
-    } catch {
-      setLocationError('No se pudo obtener la ubicación GPS. Intenta de nuevo.');
-    } finally {
-      setIsLocating(false);
-    }
+  const showCameraPermissionSettingsAlert = useCallback(() => {
+    Alert.alert(
+      'Permiso de cámara desactivado',
+      'Android ya no permite solicitar la cámara desde la app. Activa el permiso en la configuración para tomar la fotografía obligatoria.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Abrir configuración',
+          onPress: () => {
+            void Linking.openSettings().catch(() => {
+              setFormError('No se pudo abrir la configuración del dispositivo.');
+            });
+          },
+        },
+      ]
+    );
   }, []);
 
+  const showLocationPermissionSettingsAlert = useCallback(() => {
+    Alert.alert(
+      'Permiso de ubicación desactivado',
+      'Android ya no permite solicitar la ubicación desde la app. Activa el permiso en la configuración para obtener las coordenadas obligatorias.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Abrir configuración',
+          onPress: () => {
+            void Linking.openSettings().catch(() => {
+              setLocationError('No se pudo abrir la configuración del dispositivo.');
+            });
+          },
+        },
+      ]
+    );
+  }, []);
+
+  const fillCurrentLocation = useCallback(
+    async ({ showBlockedAlert = true }: LocationRequestOptions = {}) => {
+      setLocationError('');
+      setFormError('');
+      setIsLocating(true);
+
+      try {
+        const currentPermission = await Location.getForegroundPermissionsAsync();
+        const permission = currentPermission.granted
+          ? currentPermission
+          : currentPermission.canAskAgain
+            ? await Location.requestForegroundPermissionsAsync()
+            : currentPermission;
+
+        if (!permission.granted) {
+          setLocation(null);
+
+          if (!permission.canAskAgain) {
+            const message =
+              'Permiso de ubicación desactivado. Abre la configuración de la app para habilitar GPS.';
+            setLocationError(message);
+
+            if (showBlockedAlert) {
+              showLocationPermissionSettingsAlert();
+            }
+            return;
+          }
+
+          setLocationError(
+            'Permiso de ubicación denegado. Se necesita GPS para registrar latitud y longitud.'
+          );
+          return;
+        }
+
+        const position = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High,
+        });
+
+        setLocation({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        });
+      } catch {
+        setLocationError('No se pudo obtener la ubicación GPS. Intenta de nuevo.');
+      } finally {
+        setIsLocating(false);
+      }
+    },
+    [showLocationPermissionSettingsAlert]
+  );
+
   useEffect(() => {
-    void fillCurrentLocation();
+    const timerId = setTimeout(() => {
+      void fillCurrentLocation({ showBlockedAlert: false });
+    }, 0);
+
+    return () => {
+      clearTimeout(timerId);
+    };
   }, [fillCurrentLocation]);
   useEffect(() => {
     let isActive = true;
 
-    if (!location) {
-      setWeather(null);
-      setWeatherError('');
-      setIsWeatherLoading(false);
-      return;
-    }
+    void Promise.resolve()
+      .then(() => {
+        if (!isActive) {
+          return null;
+        }
 
-    setWeather(null);
-    setWeatherError('');
-    setIsWeatherLoading(true);
+        if (!location) {
+          setWeather(null);
+          setWeatherError('');
+          setIsWeatherLoading(false);
+          return null;
+        }
 
-    fetchWeatherForLocation(location.latitude, location.longitude)
+        setWeather(null);
+        setWeatherError('');
+        setIsWeatherLoading(true);
+
+        return fetchWeatherForLocation(location.latitude, location.longitude);
+      })
       .then((nextWeather) => {
-        if (isActive) {
+        if (isActive && nextWeather) {
           setWeather(nextWeather);
         }
       })
@@ -174,7 +252,6 @@ export default function HomeScreen() {
           setIsWeatherLoading(false);
         }
       });
-
     return () => {
       isActive = false;
     };
@@ -204,19 +281,65 @@ export default function HomeScreen() {
     };
   }, []);
 
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState !== 'active') {
+        return;
+      }
+
+      void getCameraPermission().then((permission) => {
+        if (permission.granted) {
+          setFormError((currentError) =>
+            currentError.startsWith('Permiso de cámara') ? '' : currentError
+          );
+        }
+      });
+
+      void Location.getForegroundPermissionsAsync().then((permission) => {
+        if (permission.granted) {
+          setLocationError((currentError) =>
+            currentError.startsWith('Permiso de ubicación') ? '' : currentError
+          );
+        }
+      });
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [getCameraPermission]);
+
   const openCamera = async () => {
     setFormError('');
     setIsCameraReady(false);
 
-    if (cameraPermission?.granted) {
+    const currentPermission = await getCameraPermission();
+
+    if (currentPermission.granted) {
       setIsCameraOpen(true);
+      return;
+    }
+
+    if (!currentPermission.canAskAgain) {
+      setFormError(
+        'Permiso de cámara desactivado. Abre la configuración de la app para habilitar cámara.'
+      );
+      showCameraPermissionSettingsAlert();
       return;
     }
 
     const permission = await requestCameraPermission();
 
     if (!permission.granted) {
-      setFormError('Permiso de cámara denegado. Actívalo para tomar la fotografía obligatoria.');
+      if (!permission.canAskAgain) {
+        setFormError(
+          'Permiso de cámara desactivado. Abre la configuración de la app para habilitar cámara.'
+        );
+        showCameraPermissionSettingsAlert();
+        return;
+      }
+
+      setFormError('Permiso de cámara denegado. Se necesita cámara para tomar la fotografía obligatoria.');
       return;
     }
 
@@ -328,7 +451,7 @@ export default function HomeScreen() {
       setWeather(null);
       setWeatherError('');
       setIsCameraOpen(false);
-      void fillCurrentLocation();
+      void fillCurrentLocation({ showBlockedAlert: false });
     } catch (error) {
       setStorageError(
         error instanceof Error ? error.message : 'No se pudo guardar el avistamiento.'
@@ -384,7 +507,7 @@ export default function HomeScreen() {
 
           <View style={styles.formBody}>
             <View style={styles.photoSection}>
-              {isCameraOpen && cameraPermission?.granted ? (
+              {isCameraOpen ? (
                 <View style={styles.cameraFrame}>
                   <CameraView
                     ref={cameraRef}
@@ -445,7 +568,11 @@ export default function HomeScreen() {
                 </Pressable>
               )}
               {cameraPermission?.granted === false ? (
-                <Text style={styles.helperError}>Permiso de cámara denegado. Puedes volver a tocar para solicitarlo.</Text>
+                <Text style={styles.helperError}>
+                  {cameraPermission.canAskAgain
+                    ? 'Permiso de cámara denegado. Se necesita para tomar la fotografía obligatoria.'
+                    : 'Permiso de cámara desactivado. Abre configuración para habilitarlo.'}
+                </Text>
               ) : null}
             </View>
 
@@ -510,7 +637,9 @@ export default function HomeScreen() {
                 <Pressable
                   accessibilityRole="button"
                   disabled={isLocating}
-                  onPress={fillCurrentLocation}
+                  onPress={() => {
+                    void fillCurrentLocation();
+                  }}
                   style={({ pressed }) => [
                     styles.smallButton,
                     isLocating && styles.disabledButton,

@@ -2,6 +2,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Image } from 'expo-image';
 import * as Location from 'expo-location';
 import { router } from 'expo-router';
+import { persistSightingPhoto } from '@/services/photos';
 import { getAllSightings, saveSighting as persistSighting } from '@/services/storage';
 import { fetchWeatherForLocation, type WeatherSummary } from '@/services/weather';
 import type { BirdSighting } from '@/types/sighting';
@@ -437,6 +438,7 @@ export default function HomeScreen() {
     setIsSaving(true);
 
     try {
+      nextSighting.photoUri = await persistSightingPhoto(photoUri);
       const savedSighting = await persistSighting(nextSighting);
       const storedSightings = await getAllSightings();
 

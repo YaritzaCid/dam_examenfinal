@@ -10,6 +10,7 @@ Aplicación móvil en Expo para registrar avistamientos de aves con evidencia fo
 - Navegación: Expo Router.
 - Package manager: Bun.
 - Persistencia local: `@react-native-async-storage/async-storage`.
+- Fotografías persistentes: `expo-file-system` con `Paths.document`.
 - Cámara: `expo-camera`.
 - Ubicación: `expo-location`.
 - Clima: Open-Meteo.
@@ -92,6 +93,11 @@ Validaciones antes de guardar:
 - No permite guardar sin fecha/hora.
 - No permite guardar cantidad inválida.
 
+Después de un guardado exitoso:
+
+- Se muestra una confirmación clara.
+- Al aceptar la confirmación, la app vuelve automáticamente al listado de `Avistamientos`.
+
 No se permite:
 
 - Selección desde galería.
@@ -117,13 +123,11 @@ Muestra:
 
 - Temperatura en °C.
 - Humedad relativa.
-- Condición traducida desde `weather_code`.
+- Condición representada desde `weather_code` mediante texto en español e icono meteorológico.
 
 El clima es opcional para guardar:
 
 - Si Open-Meteo falla o tarda demasiado, el avistamiento sigue siendo guardable.
-- Hay timeout de red.
-- Hay caché en memoria por ubicación durante 10 minutos.
 
 ### RF-03: Listado de avistamientos
 
@@ -161,7 +165,7 @@ Muestra:
 - Cantidad.
 - Notas.
 - Coordenadas.
-- Clima legible si existe.
+- Clima legible con texto e icono meteorológico si existe.
 - Dirección aproximada mediante reverse geocoding si el permiso de ubicación está disponible.
 
 Maneja:
@@ -173,34 +177,41 @@ Maneja:
 
 ### RF-05: Persistencia local
 
-Servicio:
+Servicios:
 
 ```txt
 services/storage.ts
+services/photos.ts
 ```
 
 Usa AsyncStorage para:
 
-- Guardar avistamientos.
+- Guardar los datos de los avistamientos.
 - Leer todos los avistamientos.
 - Leer un avistamiento por `id`.
 
+Antes de guardar el avistamiento, `services/photos.ts` copia la fotografía temporal a la carpeta `sightings` dentro de `Paths.document` mediante `expo-file-system`. La URI permanente resultante se guarda en `BirdSighting.photoUri`.
+
+En web se conserva la URI entregada por la cámara y no se intenta usar almacenamiento nativo. Si la copia permanente falla en móvil, el avistamiento no se guarda y el formulario queda disponible para reintentar.
+
 El parseo de datos guardados es seguro y evita `any`.
 
-### RF-06: Optimización API clima
+### RF-06: Navegación
 
-Servicio:
+La app usa Expo Router para:
 
-```txt
-services/weather.ts
-```
+- Navegar entre el listado y el formulario mediante los tabs `Avistamientos` y `Registrar`.
+- Abrir el formulario desde los botones `Nuevo` y `Registrar avistamiento`.
+- Abrir el detalle de cada avistamiento mediante la ruta dinámica `app/sighting/[id].tsx`.
+- Volver desde la pantalla de detalle a la pantalla anterior mediante la navegación de Expo Router, de modo que el usuario siempre dispone de una forma de regresar.
+- Volver automáticamente al listado después de aceptar la confirmación de guardado.
 
-Incluye:
+### Optimización de API Open-Meteo
+
+El servicio `services/weather.ts` incluye:
 
 - Timeout con `AbortController`.
-- Caché por ubicación redondeada.
-- Traducción de códigos meteorológicos.
-- Validación de respuesta Open-Meteo.
+- Caché en memoria por ubicación redondeada durante 10 minutos.
 
 ## Estructura relevante
 
@@ -211,13 +222,14 @@ app/
     _layout.tsx            Navegación por tabs
     index.tsx              Listado de avistamientos
     register.tsx           Formulario de registro
-    explore.tsx            Pantalla auxiliar del template
   sighting/
     [id].tsx               Detalle de avistamiento
 components/
   sighting-card.tsx        Tarjeta del listado
   haptic-tab.tsx           Botón de tab con haptic feedback
+  weather-icon.tsx         Icono según código meteorológico
 services/
+  photos.ts                Persistencia de fotografías
   storage.ts               Persistencia AsyncStorage
   weather.ts               Consulta y caché Open-Meteo
 types/
@@ -272,13 +284,14 @@ Permisos configurados:
 9. Completa nombre del ave, fecha/hora, cantidad y notas.
 10. Verifica sección `Clima`.
 11. Pulsa `Guardar`.
-12. Ve a tab `Avistamientos`.
-13. Confirma que aparece la tarjeta.
-14. Prueba orden `Más recientes` y `Nombre A-Z`.
-15. Toca la tarjeta.
-16. Confirma detalle con foto, datos, coordenadas, clima y dirección si disponible.
-17. Cierra y abre la app.
-18. Confirma que el registro persiste.
+12. Confirma el mensaje de guardado y toca `Aceptar`.
+13. Verifica que la app vuelve automáticamente al listado `Avistamientos`.
+14. Confirma que aparece la tarjeta.
+15. Prueba orden `Más recientes` y `Nombre A-Z`.
+16. Toca la tarjeta.
+17. Confirma detalle con foto, datos, coordenadas, clima con texto e icono y dirección si está disponible.
+18. Cierra y abre la app.
+19. Confirma que el registro y su fotografía persisten.
 
 ## Cómo probar permisos bloqueados en Android
 

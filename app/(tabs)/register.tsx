@@ -1,6 +1,9 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Image } from 'expo-image';
 import * as Location from 'expo-location';
+import { router } from 'expo-router';
+import { WeatherIcon } from '@/components/weather-icon';
+import { persistSightingPhoto } from '@/services/photos';
 import { getAllSightings, saveSighting as persistSighting } from '@/services/storage';
 import { fetchWeatherForLocation, type WeatherSummary } from '@/services/weather';
 import type { BirdSighting } from '@/types/sighting';
@@ -436,6 +439,7 @@ export default function HomeScreen() {
     setIsSaving(true);
 
     try {
+      nextSighting.photoUri = await persistSightingPhoto(photoUri);
       const savedSighting = await persistSighting(nextSighting);
       const storedSightings = await getAllSightings();
 
@@ -452,6 +456,17 @@ export default function HomeScreen() {
       setWeatherError('');
       setIsCameraOpen(false);
       void fillCurrentLocation({ showBlockedAlert: false });
+      const confirmationTitle = 'Avistamiento guardado';
+      const confirmationMessage = 'El avistamiento fue guardado correctamente.';
+
+      if (Platform.OS === 'web') {
+        window.alert(`${confirmationTitle}\n\n${confirmationMessage}`);
+        router.replace('/');
+      } else {
+        Alert.alert(confirmationTitle, confirmationMessage, [
+          { text: 'Aceptar', onPress: () => router.replace('/') },
+        ]);
+      }
     } catch (error) {
       setStorageError(
         error instanceof Error ? error.message : 'No se pudo guardar el avistamiento.'
@@ -669,7 +684,11 @@ export default function HomeScreen() {
                   </View>
                 ) : weather ? (
                   <>
-                    <Text style={styles.weatherCondition}>{weather.condition}</Text>
+                    <Text style={styles.weatherCondition}>
+                      <WeatherIcon color={palette.kingfisher} weatherCode={weather.weatherCode} />
+                      {'  '}
+                      {weather.condition}
+                    </Text>
                     <Text style={styles.weatherDetails}>
                       {weather.temperatureCelsius.toFixed(1)} °C · Humedad {weather.relativeHumidity}%
                     </Text>

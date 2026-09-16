@@ -1,7 +1,7 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Image } from 'expo-image';
 import * as Location from 'expo-location';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { WeatherIcon } from '@/components/weather-icon';
 import { persistSightingPhoto } from '@/services/photos';
 import { getAllSightings, saveSighting as persistSighting } from '@/services/storage';
@@ -80,6 +80,8 @@ const typefaces = {
 
 export default function HomeScreen() {
   const cameraRef = useRef<CameraView | null>(null);
+  const formSessionRef = useRef(0);
+  const wasCancelledRef = useRef(false);
   const [cameraPermission, requestCameraPermission, getCameraPermission] = useCameraPermissions();
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
@@ -101,6 +103,26 @@ export default function HomeScreen() {
   const [saveMessage, setSaveMessage] = useState('');
   const [storageError, setStorageError] = useState('');
   const [formError, setFormError] = useState('');
+  const resetSightingForm = useCallback(() => {
+    setPhotoUri(null);
+    setIsCameraOpen(false);
+    setIsCameraReady(false);
+    setIsTakingPhoto(false);
+    setLocation(null);
+    setIsLocating(false);
+    setLocationError('');
+    setBirdName('');
+    setObservedAt(observedAtFormatter.format(new Date()));
+    setCount('1');
+    setNotes('');
+    setWeather(null);
+    setIsWeatherLoading(false);
+    setWeatherError('');
+    setPreparedSighting(null);
+    setSaveMessage('');
+    setStorageError('');
+    setFormError('');
+  }, []);
 
   const countNumber = Number(count);
   const hasValidCount = Number.isInteger(countNumber) && countNumber >= 1;
@@ -156,6 +178,11 @@ export default function HomeScreen() {
 
   const fillCurrentLocation = useCallback(
     async ({ showBlockedAlert = true }: LocationRequestOptions = {}) => {
+      if (wasCancelledRef.current) {
+        return;
+      }
+
+      const formSession = formSessionRef.current;
       setLocationError('');
       setFormError('');
       setIsLocating(true);
@@ -167,6 +194,10 @@ export default function HomeScreen() {
           : currentPermission.canAskAgain
             ? await Location.requestForegroundPermissionsAsync()
             : currentPermission;
+
+        if (formSessionRef.current !== formSession) {
+          return;
+        }
 
         if (!permission.granted) {
           setLocation(null);
@@ -192,17 +223,36 @@ export default function HomeScreen() {
           accuracy: Location.Accuracy.High,
         });
 
+        if (formSessionRef.current !== formSession) {
+          return;
+        }
+
         setLocation({
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
         });
       } catch {
-        setLocationError('No se pudo obtener la ubicación GPS. Intenta de nuevo.');
+        if (formSessionRef.current === formSession) {
+          setLocationError('No se pudo obtener la ubicación GPS. Intenta de nuevo.');
+        }
       } finally {
-        setIsLocating(false);
+        if (formSessionRef.current === formSession) {
+          setIsLocating(false);
+        }
       }
     },
     [showLocationPermissionSettingsAlert]
+  );
+  useFocusEffect(
+    useCallback(() => {
+      if (!wasCancelledRef.current) {
+        return;
+      }
+
+      wasCancelledRef.current = false;
+      resetSightingForm();
+      void fillCurrentLocation({ showBlockedAlert: false });
+    }, [fillCurrentLocation, resetSightingForm])
   );
 
   useEffect(() => {
@@ -216,10 +266,11 @@ export default function HomeScreen() {
   }, [fillCurrentLocation]);
   useEffect(() => {
     let isActive = true;
+    const formSession = formSessionRef.current;
 
     void Promise.resolve()
       .then(() => {
-        if (!isActive) {
+        if (!isActive || formSessionRef.current !== formSession) {
           return null;
         }
 
@@ -237,12 +288,12 @@ export default function HomeScreen() {
         return fetchWeatherForLocation(location.latitude, location.longitude);
       })
       .then((nextWeather) => {
-        if (isActive && nextWeather) {
+        if (isActive && formSessionRef.current === formSession && nextWeather) {
           setWeather(nextWeather);
         }
       })
       .catch((error: unknown) => {
-        if (isActive) {
+        if (isActive && formSessionRef.current === formSession) {
           setWeatherError(
             error instanceof Error
               ? `${error.message} Puedes guardar el avistamiento sin clima.`
@@ -251,7 +302,7 @@ export default function HomeScreen() {
         }
       })
       .finally(() => {
-        if (isActive) {
+        if (isActive && formSessionRef.current === formSession) {
           setIsWeatherLoading(false);
         }
       });
@@ -313,10 +364,15 @@ export default function HomeScreen() {
   }, [getCameraPermission]);
 
   const openCamera = async () => {
+    const formSession = formSessionRef.current;
     setFormError('');
     setIsCameraReady(false);
 
     const currentPermission = await getCameraPermission();
+
+    if (formSessionRef.current !== formSession) {
+      return;
+    }
 
     if (currentPermission.granted) {
       setIsCameraOpen(true);
@@ -332,6 +388,10 @@ export default function HomeScreen() {
     }
 
     const permission = await requestCameraPermission();
+
+    if (formSessionRef.current !== formSession) {
+      return;
+    }
 
     if (!permission.granted) {
       if (!permission.canAskAgain) {
@@ -355,6 +415,7 @@ export default function HomeScreen() {
       return;
     }
 
+    const formSession = formSessionRef.current;
     setFormError('');
     setIsTakingPhoto(true);
 
@@ -362,6 +423,10 @@ export default function HomeScreen() {
       const photo = await cameraRef.current.takePictureAsync({
         quality: 0.85,
       });
+
+      if (formSessionRef.current !== formSession) {
+        return;
+      }
 
       if (!photo?.uri) {
         setFormError('No se pudo guardar la fotografía tomada. Intenta de nuevo.');
@@ -371,9 +436,13 @@ export default function HomeScreen() {
       setPhotoUri(photo.uri);
       setIsCameraOpen(false);
     } catch {
-      setFormError('No se pudo tomar la fotografía. Intenta de nuevo.');
+      if (formSessionRef.current === formSession) {
+        setFormError('No se pudo tomar la fotografía. Intenta de nuevo.');
+      }
     } finally {
-      setIsTakingPhoto(false);
+      if (formSessionRef.current === formSession) {
+        setIsTakingPhoto(false);
+      }
     }
   };
 
@@ -474,6 +543,12 @@ export default function HomeScreen() {
     } finally {
       setIsSaving(false);
     }
+  };
+  const cancelSighting = () => {
+    formSessionRef.current += 1;
+    wasCancelledRef.current = true;
+    resetSightingForm();
+    router.replace('/');
   };
 
   return (
@@ -720,21 +795,36 @@ export default function HomeScreen() {
 
             {formError ? <Text style={styles.formError}>{formError}</Text> : null}
 
-            <Pressable
-              accessibilityRole="button"
-              disabled={isSaving}
-              onPress={saveSighting}
-              style={({ pressed }) => [
-                styles.primaryButton,
-                (!requiredComplete || isSaving) && styles.primaryButtonDisabled,
-                pressed && styles.pressed,
-              ]}>
-              {isSaving ? (
-                <ActivityIndicator color={palette.card} size="small" />
-              ) : (
-                <Text style={styles.primaryButtonText}>Guardar</Text>
-              )}
-            </Pressable>
+            <View style={styles.actionRow}>
+              <Pressable
+                accessibilityRole="button"
+                disabled={isSaving}
+                onPress={cancelSighting}
+                style={({ pressed }) => [
+                  styles.secondaryButton,
+                  styles.actionButton,
+                  isSaving && styles.disabledButton,
+                  pressed && styles.pressed,
+                ]}>
+                <Text style={styles.secondaryButtonText}>Cancelar</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                disabled={isSaving}
+                onPress={saveSighting}
+                style={({ pressed }) => [
+                  styles.primaryButton,
+                  styles.actionButton,
+                  (!requiredComplete || isSaving) && styles.primaryButtonDisabled,
+                  pressed && styles.pressed,
+                ]}>
+                {isSaving ? (
+                  <ActivityIndicator color={palette.card} size="small" />
+                ) : (
+                  <Text style={styles.primaryButtonText}>Guardar</Text>
+                )}
+              </Pressable>
+            </View>
           </View>
         </View>
 
@@ -1131,6 +1221,14 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     padding: 12,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  actionButton: {
+    flex: 1,
+    minHeight: 56,
   },
   primaryButton: {
     alignItems: 'center',
